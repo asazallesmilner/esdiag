@@ -4,7 +4,7 @@
 
 use super::super::processor::{DataSource, SourceContext, StreamingDataSource};
 use super::archive::{normalize_supported_content, normalize_supported_reader_to_temp, supports_json_normalization};
-use super::{MissingSource, RawResponse, Receive, ReceiveMultiple, ReceiveRaw};
+use super::{MissingSource, RawResponse, Receive, ReceiveMultiple, ReceiveRaw, has_json_content};
 use eyre::{Result, WrapErr, eyre};
 use futures::stream::{self, BoxStream};
 use serde::de::DeserializeOwned;
@@ -79,9 +79,18 @@ impl Receive for DirectoryReceiver {
             tracing::debug!("Reading file: {}", &filename.display());
             match File::open(&filename) {
                 Ok(file) => {
-                    let parsed = if should_normalize_file(&source_path, self.scrubbed) {
+                    let mut reader = BufReader::new(file);
+                    if !has_json_content(&mut reader)? {
+                        last_error = Some(
+                            MissingSource::Empty {
+                                path: filename.display().to_string(),
+                            }
+                            .into(),
+                        );
+                        continue;
+                    }
+                    let data: T = if should_normalize_file(&source_path, self.scrubbed) {
                         tracing::debug!("Reading {} (scrubbed mode)", source_path);
-                        let reader = BufReader::new(file);
                         let mut transformed = normalize_supported_reader_to_temp(&source_path, reader)?;
                         tracing::debug!(
                             "Unscrubbed {} address fields in {}",
@@ -94,24 +103,9 @@ impl Receive for DirectoryReceiver {
                         if self.scrubbed {
                             tracing::debug!("Scrubbed mode read {} (no normalization rules)", source_path);
                         }
-                        serde_json::from_reader(BufReader::new(file))
-                    };
-                    let data: T = match parsed {
-                        Ok(data) => data,
-                        Err(error) if error.is_eof() => {
-                            last_error = Some(
-                                MissingSource::Empty {
-                                    path: filename.display().to_string(),
-                                }
-                                .into(),
-                            );
-                            continue;
-                        }
-                        Err(error) => {
-                            return Err(error)
-                                .wrap_err_with(|| format!("Failed to parse {} for {}", filename.display(), T::name()));
-                        }
-                    };
+                        serde_json::from_reader(reader)
+                    }
+                    .wrap_err_with(|| format!("Failed to parse {} for {}", filename.display(), T::name()))?;
                     return Ok(data);
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {

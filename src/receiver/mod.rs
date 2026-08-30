@@ -34,6 +34,7 @@ use directory::DirectoryReceiver;
 use eyre::{Result, eyre};
 use futures::stream::BoxStream;
 use serde::de::DeserializeOwned;
+use std::io::BufRead;
 use std::path::{Component, Path};
 use std::time::Duration;
 use upload_service::UploadServiceDownloader;
@@ -91,6 +92,20 @@ impl From<Option<bool>> for ScrubMode {
 }
 
 impl std::error::Error for MissingSource {}
+
+pub(crate) fn has_json_content<R: BufRead>(reader: &mut R) -> std::io::Result<bool> {
+    loop {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            return Ok(false);
+        }
+        if buffer.iter().any(|byte| !matches!(byte, b' ' | b'\n' | b'\r' | b'\t')) {
+            return Ok(true);
+        }
+        let length = buffer.len();
+        reader.consume(length);
+    }
+}
 
 fn should_enable_scrubbed(mode: ScrubMode, filename: Option<&str>) -> bool {
     match mode {
@@ -588,13 +603,27 @@ impl std::fmt::Display for Receiver {
 
 #[cfg(test)]
 mod tests {
-    use super::{DirectoryReceiver, Receiver, ScrubMode, resolve_scrub_detect_name, should_enable_scrubbed};
+    use super::{
+        DirectoryReceiver, Receiver, ScrubMode, has_json_content, resolve_scrub_detect_name, should_enable_scrubbed,
+    };
     use crate::data::{Application, KnownHostBuilder};
+    use std::io::{BufReader, Cursor};
     use url::Url;
 
     fn directory_receiver() -> Receiver {
         let root = tempfile::tempdir().expect("temp diagnostic root");
         Receiver::Directory(DirectoryReceiver::try_from(root.keep()).expect("directory receiver"))
+    }
+
+    #[test]
+    fn empty_source_detection_does_not_mask_truncated_json() {
+        let mut empty = BufReader::new(Cursor::new(b" \n\t\r".as_slice()));
+        assert!(!has_json_content(&mut empty).expect("inspect empty source"));
+
+        let mut truncated = BufReader::new(Cursor::new(br#"{"nodes":"#.as_slice()));
+        assert!(has_json_content(&mut truncated).expect("inspect truncated source"));
+        let error = serde_json::from_reader::<_, serde_json::Value>(truncated).expect_err("JSON is truncated");
+        assert!(error.is_eof());
     }
 
     #[test]

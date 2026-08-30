@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     processor::{DataSource, SourceContext, StreamingDataSource},
-    receiver::{MissingSource, Receive, ReceiveMultiple, ReceiveRaw},
+    receiver::{MissingSource, Receive, ReceiveMultiple, ReceiveRaw, has_json_content},
 };
 use bytes::Bytes;
 use eyre::{Result, WrapErr, eyre};
@@ -70,8 +70,17 @@ impl Receive for ArchiveBytesReceiver {
                         Ok(file) => file,
                         Err(_) => return Err(eyre!("Failed to read file {filename} from archive")),
                     };
-                    let parsed = if self.scrubbed && supports_json_normalization(&filename) {
-                        let reader = BufReader::new(file);
+                    let mut reader = BufReader::new(file);
+                    if !has_json_content(&mut reader)? {
+                        last_resolve_error = Some(
+                            MissingSource::Empty {
+                                path: filename.to_string(),
+                            }
+                            .into(),
+                        );
+                        continue;
+                    }
+                    let data: T = if self.scrubbed && supports_json_normalization(&filename) {
                         let mut transformed = normalize_supported_reader_to_temp(&filename, reader)?;
                         tracing::debug!(
                             "Unscrubbed {} address fields in {}",
@@ -84,25 +93,9 @@ impl Receive for ArchiveBytesReceiver {
                         if self.scrubbed {
                             tracing::debug!("Scrubbed mode read {} (no normalization rules)", filename);
                         }
-                        let reader = BufReader::new(file);
                         serde_json::from_reader(reader)
-                    };
-                    let data: T = match parsed {
-                        Ok(data) => data,
-                        Err(error) if error.is_eof() => {
-                            last_resolve_error = Some(
-                                MissingSource::Empty {
-                                    path: filename.to_string(),
-                                }
-                                .into(),
-                            );
-                            continue;
-                        }
-                        Err(error) => {
-                            return Err(error)
-                                .wrap_err_with(|| format!("Failed to parse {filename} for {}", T::name()));
-                        }
-                    };
+                    }
+                    .wrap_err_with(|| format!("Failed to parse {filename} for {}", T::name()))?;
                     return Ok(data);
                 }
                 Err(e) => {
