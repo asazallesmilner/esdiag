@@ -70,6 +70,7 @@ pub async fn submit(
                             remove_err
                         );
                     }
+                    state.record_job_rejected().await;
                     return (
                         StatusCode::BAD_REQUEST,
                         Html(format!(
@@ -82,6 +83,7 @@ pub async fn submit(
 
                 let filename = match field.file_name() {
                     Some(filename) if !filename.ends_with(".zip") => {
+                        state.record_job_rejected().await;
                         return (
                             StatusCode::BAD_REQUEST,
                             Html(format!(
@@ -93,6 +95,7 @@ pub async fn submit(
                     }
                     Some(filename) => filename.to_string(),
                     None => {
+                        state.record_job_rejected().await;
                         return (
                             StatusCode::BAD_REQUEST,
                             Html(format!(
@@ -176,6 +179,7 @@ pub async fn submit(
 
         (StatusCode::OK, Html(upload_file_element))
     } else {
+        state.record_job_rejected().await;
         (
             StatusCode::BAD_REQUEST,
             Html(format!(
