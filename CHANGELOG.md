@@ -23,6 +23,10 @@ published release notes, maintenance branches, and tagged history.
 - Added `esdiag-lite.ps1` for version-aware Elasticsearch diagnostic collection on Windows PowerShell.
 - Added receiver-stage normalization for malformed IPv4 values in scrubbed diagnostics, with `--scrubbed` CLI flag and upload checkbox (#330).
 
+### Security
+
+- Escaped uploaded filenames in HTML responses to prevent markup and script injection.
+
 ### Changed
 
 - Buffered scrub normalization output to avoid per-byte temporary-file writes.
